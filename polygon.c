@@ -19,7 +19,7 @@ SDL_Surface *crop_surface(SDL_Surface* sprite_sheet, int x, int y, int width, in
 
 struct Polygon
 {
-    Uint16 x1, x2, x3, x4, y1, y2, y3, y4;
+    Uint16 x1, x2, x3, x4, x5, x6, y1, y2, y3, y4, y5, y6;
     Uint8 r, g, b, a;
 };
 
@@ -38,62 +38,23 @@ struct Image *random_change(struct Image *i)
     if (RR (10) && i->num_polys > 0)
     {
         int p = RR(i->num_polys);
-        if (!RR(3))
-        {
-            i->polys[p]->x1 += RR(30) - 15;
-            i->polys[p]->x1 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->y1 += RR(30) - 15;
-            i->polys[p]->y1 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->x2 += RR(30) - 15;
-            i->polys[p]->x2 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->y2 += RR(30) - 15;
-            i->polys[p]->y2 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->x3 += RR(30) - 15;
-            i->polys[p]->x3 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->y3 += RR(30) - 15;
-            i->polys[p]->y3 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->x4 += RR(30) - 15;
-            i->polys[p]->x4 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->y4 += RR(30) - 15;
-            i->polys[p]->y4 %= 256;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->r += RR(30) - 15;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->g += RR(30) - 15;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->b += RR(30) - 15;
-        }
-        if (!RR(3))
-        {
-            i->polys[p]->a += RR(30) - 15;
-        }
+        Uint16 *P = &(i->polys[p]->x1);
+        Sint16 p16;
+        Uint8  *P8 = &(i->polys[p]->r);
+        for (n = 0; n < 12; ++ n)
+            if (!RR(3))
+            {
+                p16 = P[n];
+                p16 += RR(30) - 15;
+                if (p16 >= 0 && p16 < 256) P[n] = p16;
+            }
+
+        for (n = 0; n < 3; ++ n)
+            if (!RR(3))
+                P8[n] += RR(30) - 15;
+
+        if (P8[n] < 40) P8[n] += RR(10);
+        else if (P8[n] > 50) P8[n] -= RR(10);
     }
     else if (!RR (3))
         i->br += RR(20) - 10;
@@ -167,7 +128,7 @@ void mkimg (struct Image *image)
     SDL_FillRect(ret, NULL, SDL_MapRGB(ret->format, image->br, image->bg,  image->bb));
     for (i = 0; i < num_polys; ++ i)
         filledPolygonRGBA(ret,
-                          &polys[i]->x1, &polys[i]->y1, 4,
+                          &polys[i]->x1, &polys[i]->y1, 6,
                           polys[i]->r, polys[i]->g, polys[i]->b, polys[i]->a);
 }
 
@@ -228,25 +189,33 @@ int main_loop()
             }
             case SDL_KEYDOWN:
             {
-                int x = RR(166)+45, y = RR(166)+45, s = RR(30)+15;
+                int x = RR(166)+45, y = RR(166)+45, s = RR(10)+12;
+                Uint32 u;
+                SDL_PixelFormat *fmt;
                 pl = malloc(sizeof(struct Polygon));
                 pl->x1 = x-s;
                 pl->y1 = y-s;
                 pl->x2 = x+s;
                 pl->y2 = y-s;
-                pl->x3 = x+s;
-                pl->y3 = y+s;
-                pl->x4 = x-s;
+                pl->x3 = x+s+s;
+                pl->y3 = y;
+                pl->x4 = x+s;
                 pl->y4 = y+s;
+                pl->x5 = x-s;
+                pl->y5 = y+s;
+                pl->x6 = x-s-s;
+                pl->y6 = y;
                 SDL_LockSurface (orig_image);
+                fmt = orig_image->format;
                 int wh = PIXEL_AT(x, y);
                 //printf("Location: %d\n", wh);
                 //SDL_Delay(1000);
-                pl->r = ((char*)orig_image->pixels)[wh+0];
-                pl->g = ((char*)orig_image->pixels)[wh+1];
-                pl->b = ((char*)orig_image->pixels)[wh+2];
-                pl->a = RR(128)+64;
+                u = *(Uint32*)orig_image->pixels+wh;
                 SDL_UnlockSurface (orig_image);
+                pl->r = ((u&fmt->Rmask)>>fmt->Rshift)<<fmt->Rloss;
+                pl->g = ((u&fmt->Gmask)>>fmt->Gshift)<<fmt->Gloss;
+                pl->b = ((u&fmt->Bmask)>>fmt->Bshift)<<fmt->Bloss;
+                pl->a = 35;
                 add_poly(cur_image, pl);
                 break;
             }
