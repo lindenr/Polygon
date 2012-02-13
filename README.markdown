@@ -9,3 +9,4 @@ Required for running (Linux):
 
 If you want to compile it, you will also need the *-dev packages.
 
+(With thanks to Cheng for fixing a serious memory leak.)
