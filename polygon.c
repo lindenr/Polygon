@@ -1,9 +1,11 @@
 #include <stdlib.h>
 #include <SDL/SDL.h>
 #include <SDL/SDL_gfxPrimitives.h>
+#include <SDL/SDL_image.h>
 
 SDL_Surface *orig_image;
 float cur_best = 10000;
+int generation = 0;
 
 SDL_Surface *surface_from(SDL_Surface *sf, int w, int h)
 {
@@ -254,12 +256,17 @@ int main_loop()
                             random_change(duplicate_image(cur_image)),
                             random_change(duplicate_image(cur_image))};
     cur_image = thebest(ptrs, 3);
+    if (!((++generation)%500)) new_polygon ();
     float cur = ((float)cur_image->fitness)/65536;
-    if (cur < cur_best)
-        printf("Current best: %f\n", cur);
+    printf("Current best: %f (generation %d)\n", cur, generation);
     cur_best = cur;
     return 0;
 }
+
+/* windows likes this :/ */
+#ifdef main
+#undef main
+#endif
 
 int main (int argc, char *argv[])
 {
@@ -287,7 +294,7 @@ int main (int argc, char *argv[])
         exit (1);
     }
     file = argv[1];
-    orig_image = SDL_LoadBMP (file);
+    orig_image = IMG_Load (file);
     if (orig_image == NULL)
     {
         fprintf (stderr, "Unable to load %s: %s\n", file, SDL_GetError ());
@@ -297,7 +304,7 @@ int main (int argc, char *argv[])
     memset(cur_image, 0, sizeof(*cur_image));
     cur_image->fitness = ~0;
 
-    orig_image = crop_surface(orig_image, 128, 128, 256, 256);
+    orig_image = crop_surface(orig_image, 20, 20, 256, 256);
     cur_image->img = surface_from(orig_image, 256, 256);
     SDL_BlitSurface(orig_image, NULL, screen, &dest);
     SDL_UpdateRects(screen, 1, &dest);
