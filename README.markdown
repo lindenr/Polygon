@@ -6,6 +6,7 @@ Required for running (Linux):
 
  * SDL
  * SDL_gfx
+ * SDL_image
 
 If you want to compile it, you will also need the *-dev packages.
 
