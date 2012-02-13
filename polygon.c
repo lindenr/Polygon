@@ -127,7 +127,7 @@ void free_image(struct Image *i)
 {
     int n;
     /* free the surface */
-    free(i->img);
+    SDL_FreeSurface(i->img);
     /* All the polys */
     for (n = 0; n < i->num_polys; ++ n)
         free(i->polys[n]);
