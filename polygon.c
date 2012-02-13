@@ -34,6 +34,16 @@ struct Image
     int num_polys;
     Uint8 br, bg, bb;
 } *cur_image = NULL;
+
+SDL_Surface *img_lines(struct Image *i)
+{
+    SDL_Surface *ret = surface_from(i->img, i->img->w, i->img->h);
+    int n;
+    for (n = 0; n < i->num_polys; ++ n)
+        polygonRGBA(ret, &(i->polys[n]->x1), &(i->polys[n]->y1), 6, 90, 90, 255, 255);
+    return ret;
+}
+
 #define RR(n) ((int)((((0.0+n)*rand()) / (RAND_MAX + 1.0))))
 struct Image *random_change(struct Image *i)
 {
@@ -312,7 +322,11 @@ int main (int argc, char *argv[])
     mkimg(cur_image);
     do
     {
+        dest.y = 30;
         SDL_BlitSurface(cur_image->img, NULL, screen, &dest);
+        SDL_UpdateRects(screen, 1, &dest);
+        dest.y = 294;
+        SDL_BlitSurface(img_lines(cur_image), NULL, screen, &dest);
         SDL_UpdateRects(screen, 1, &dest);
         SDL_Delay(1);
     }
