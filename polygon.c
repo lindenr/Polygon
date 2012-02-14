@@ -1,7 +1,10 @@
 #include <stdlib.h>
+#include <assert.h>
 #include <SDL/SDL.h>
 #include <SDL/SDL_gfxPrimitives.h>
+#include <SDL/SDL_gfxPrimitives_font.h>
 #include <SDL/SDL_image.h>
+#include <SDL/SDL_ttf.h>
 
 SDL_Surface *orig_image;
 float cur_best = 10000;
@@ -33,6 +36,7 @@ struct Image
     struct Polygon **polys;
     int num_polys;
     Uint8 br, bg, bb;
+    SDL_Surface *err;
 } *cur_image = NULL;
 
 SDL_Surface *img_lines(struct Image *i)
@@ -40,7 +44,7 @@ SDL_Surface *img_lines(struct Image *i)
     SDL_Surface *ret = surface_from(i->img, i->img->w, i->img->h);
     int n;
     for (n = 0; n < i->num_polys; ++ n)
-        polygonRGBA(ret, &(i->polys[n]->x1), &(i->polys[n]->y1), 6, 90, 90, 255, 255);
+        polygonRGBA(ret, &(i->polys[n]->x1), &(i->polys[n]->y1), 6, 90, 190, 255, 255);
     return ret;
 }
 
@@ -102,11 +106,13 @@ struct Image *add_poly(struct Image *i, struct Polygon *p)
     return i;
 }
 
-void free_image(struct Image *i)
+void free_image(struct Image *i, int error)
 {
     int n;
-    /* free the surface */
+    /* free the surfaces */
     SDL_FreeSurface(i->img);
+    if (error)
+        SDL_FreeSurface(i->err);
     /* All the polys */
     for (n = 0; n < i->num_polys; ++ n)
         free(i->polys[n]);
@@ -124,6 +130,7 @@ struct Image *duplicate_image(struct Image* i)
     ret->fitness = ~0;
     /* Blank surface */
     ret->img = surface_from(i->img, i->img->w, i->img->h);
+    ret->err = i->err;
     ret->polys = malloc(sizeof(struct Polygon*)*i->num_polys);
     for (n = 0; n < i->num_polys; ++ n)
     {
@@ -137,7 +144,7 @@ struct Image *duplicate_image(struct Image* i)
     return ret;
 }
 
-void mkimg (struct Image *image)
+void mkimg (struct Image *image, int error)
 {
     SDL_Surface *ret = image->img;
     struct Polygon **polys = image->polys;
@@ -150,60 +157,88 @@ void mkimg (struct Image *image)
                           polys[i]->r, polys[i]->g, polys[i]->b, polys[i]->a);
 }
 
-#define ABSOLUTIFY(a,b) \
-    if (a > b)  \
-    image->fitness += a - b;\
-    else \
-    image->fitness += b - a
-
+#define NOSQABS(a,b,f) if (a>b)f+=a-b;else f+=b-a
+#define ABSOLUTIFY(a,f) f += (a)*(a)
 #define JOIN(a,b) a ## b
 #define COL_AT_(u,c) (Uint8)((u&fmt->JOIN(c,mask))>>fmt->JOIN(c,shift))<<fmt->JOIN(c,loss)
-void fitness (struct Image *image)
+void fitness (struct Image *image, int error)
 {
     int i, end_data = orig_image->h * orig_image->pitch / 4;
-    Uint32 *timg, *oimg, da, db;
+    Uint32 *timg, *oimg, da, db, areas[64]={0,};
     Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
     SDL_PixelFormat *fmt = orig_image->format;
     //if (image->fitness != ~0) return;
     image->fitness = 0;
-    mkimg(image);
+    mkimg(image, error);
     // need a fast pixel comparison
     SDL_LockSurface(image->img);
     timg = image->img->pixels;
     SDL_LockSurface(orig_image);
     oimg = orig_image->pixels;
-    for (i = 0; i < end_data; ++ i)
+    if (error)
     {
-        da = timg[i];
-        db = oimg[i];
-        c_r = COL_AT_(da, R);
-        c_g = COL_AT_(da, G);
-        c_b = COL_AT_(da, B);
-        o_r = COL_AT_(db, R);
-        o_g = COL_AT_(db, G);
-        o_b = COL_AT_(db, B);
-        ABSOLUTIFY(c_r, o_r);
-        ABSOLUTIFY(c_g, o_g);
-        ABSOLUTIFY(c_b, o_b);
+        image->err = surface_from(orig_image, 256, 256);
+        for (i = 0; i < end_data; ++ i)
+        {
+            da = timg[i];
+            db = oimg[i];
+            c_r = COL_AT_(da, R);
+            c_g = COL_AT_(da, G);
+            c_b = COL_AT_(da, B);
+            o_r = COL_AT_(db, R);
+            o_g = COL_AT_(db, G);
+            o_b = COL_AT_(db, B);
+            int wh = ((i>>5)&7)|(((i>>13)&7)<<3);
+            assert(wh<64);
+            NOSQABS(c_r, o_r, areas[wh]);
+            NOSQABS(c_g, o_g, areas[wh]);
+            NOSQABS(c_b, o_b, areas[wh]);
+            ABSOLUTIFY(c_r - o_r, image->fitness);
+            ABSOLUTIFY(c_g - o_g, image->fitness);
+            ABSOLUTIFY(c_b - o_b, image->fitness);
+        }
+        for (i = 0; i < 64; ++ i)
+        {
+            boxRGBA(image->err, (i&7)<<5, ((i>>3)&7)<<5, ((i&7)<<5)+32, (((i>>3)&7)<<5)+32, areas[i]>>10, 0, 0, 255);
+        }
+    }
+    else
+    {
+        for (i = 0; i < end_data; ++ i)
+        {
+            da = timg[i];
+            db = oimg[i];
+            c_r = COL_AT_(da, R);
+            c_g = COL_AT_(da, G);
+            c_b = COL_AT_(da, B);
+            o_r = COL_AT_(db, R);
+            o_g = COL_AT_(db, G);
+            o_b = COL_AT_(db, B);
+            ABSOLUTIFY(c_r - o_r, image->fitness);
+            ABSOLUTIFY(c_g - o_g, image->fitness);
+            ABSOLUTIFY(c_b - o_b, image->fitness);
+        }
     }
     SDL_UnlockSurface(image->img);
     SDL_UnlockSurface(orig_image);
 }
 
-struct Image *thebest(struct Image **images, int num_images)
+struct Image *thebest(struct Image **images, int num_images, int error)
 {
     int i;
     struct Image *ret = images[0];
+    if (error)
+        SDL_FreeSurface(ret->err);
     for (i = 0; i < num_images; ++ i)
-        fitness(images[i]);
+        fitness(images[i], error);
     for (i = 1; i < num_images; ++ i)
     {
         if (ret->fitness > images[i]->fitness)
         {
-            free_image(ret);
+            free_image(ret, error);
             ret = images[i];
         }
-        else free_image(images[i]);
+        else free_image(images[i], error);
     }
     return ret;
 }
@@ -222,13 +257,13 @@ void new_polygon()
     pl->y1 = y-s;
     pl->x2 = x+s;
     pl->y2 = y-s;
-    pl->x3 = x+s+s;
+    pl->x3 = x+s;
     pl->y3 = y;
     pl->x4 = x+s;
     pl->y4 = y+s;
     pl->x5 = x-s;
     pl->y5 = y+s;
-    pl->x6 = x-s-s;
+    pl->x6 = x-s;
     pl->y6 = y;
     SDL_LockSurface (orig_image);
     fmt = orig_image->format;
@@ -265,8 +300,8 @@ int main_loop()
     struct Image *ptrs[] = {cur_image,
                             random_change(duplicate_image(cur_image)),
                             random_change(duplicate_image(cur_image))};
-    cur_image = thebest(ptrs, 3);
-    if (!((++generation)%500)) new_polygon ();
+    cur_image = thebest(ptrs, 3, !((++generation)%50));
+    if (!((generation)%400)) new_polygon();
     float cur = ((float)cur_image->fitness)/65536;
     printf("Current best: %f (generation %d)\n", cur, generation);
     cur_best = cur;
@@ -297,6 +332,13 @@ int main (int argc, char *argv[])
     }
     atexit (SDL_Quit);
 
+    if (TTF_Init() == -1)
+    {
+        printf(stderr, "TTF_Init: %s\n", TTF_GetError());
+        exit (1);
+    }
+    TTF_Font *font = TTF_OpenFont("cnew.ttf", 24);
+
     screen = SDL_SetVideoMode (520, 550, 32, SDL_SWSURFACE);
     if (screen == NULL)
     {
@@ -319,18 +361,33 @@ int main (int argc, char *argv[])
     SDL_BlitSurface(orig_image, NULL, screen, &dest);
     SDL_UpdateRects(screen, 1, &dest);
     dest.x = 264;
-    mkimg(cur_image);
+    mkimg(cur_image, 0);
+    SDL_Color col = {255, 255, 255};
+    SDL_Surface *s = TTF_RenderText_Solid(font, "hello", col);
+    SDL_Rect rect = {0, 0, 300, 30};
+    SDL_BlitSurface(s, NULL, screen, &rect);
+    SDL_FreeSurface(s);
     do
     {
+        dest.x = 264;
         dest.y = 30;
         SDL_BlitSurface(cur_image->img, NULL, screen, &dest);
-        SDL_UpdateRects(screen, 1, &dest);
         dest.y = 294;
-        SDL_BlitSurface(img_lines(cur_image), NULL, screen, &dest);
-        SDL_UpdateRects(screen, 1, &dest);
+        SDL_BlitSurface(cur_image->err, NULL, screen, &dest);
+        dest.x = 0;
+        SDL_Surface *s = img_lines(cur_image);
+        SDL_BlitSurface(s, NULL, screen, &dest);
+        SDL_FreeSurface(s);
+        SDL_UpdateRect(screen, 0, 0, 0, 0);
         SDL_Delay(1);
     }
     while (main_loop() == 0);
     printf("Exiting...\n");
+    SDL_FreeSurface(orig_image);
+    SDL_FreeSurface(screen);
+    free_image(cur_image, 1);
+    TTF_CloseFont(font);
+    TTF_Quit();
+    SDL_Quit();
 } 
 
