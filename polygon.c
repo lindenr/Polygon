@@ -38,6 +38,118 @@ struct Image
     Uint8 br, bg, bb;
     SDL_Surface *err;
 } *cur_image = NULL;
+void mkimg(struct Image*, int);
+
+struct ThreadInfo
+{
+    Uint32 *timg, *oimg;
+    SDL_PixelFormat *fmt;
+    struct Image *img;
+    int i;
+};
+
+#define NOSQABS(a,b,f) if (a>b)f+=a-b;else f+=b-a
+#define ABSOLUTIFY(a,f) f += (a)*(a)
+#define JOIN(a,b) a ## b
+#define COL_AT_(u,c) (Uint8)((u&fmt->JOIN(c,mask))>>fmt->JOIN(c,shift))<<fmt->JOIN(c,loss)
+int threadFunction(void *threadinfo)
+{
+    struct ThreadInfo *tinfo = threadinfo;
+    SDL_PixelFormat *fmt = tinfo->fmt;
+    Uint32 *timg = tinfo->timg, *oimg = tinfo->oimg;
+    int data;
+    Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
+    int i, ret = 0;
+    Uint32 da, db;
+    struct Image *image = tinfo->img;
+    data = tinfo->i;
+    data <<= 13;
+    for (i = 0; i < 8192; ++ i)
+    {
+        da = timg[i+data];
+        db = oimg[i+data];
+        c_r = COL_AT_(da, R);
+        c_g = COL_AT_(da, G);
+        c_b = COL_AT_(da, B);
+        o_r = COL_AT_(db, R);
+        o_g = COL_AT_(db, G);
+        o_b = COL_AT_(db, B);
+        ABSOLUTIFY(c_r - o_r, ret);
+        ABSOLUTIFY(c_g - o_g, ret);
+        ABSOLUTIFY(c_b - o_b, ret);
+    }
+    return ret;
+}
+
+void fitness (struct Image *image, int error)
+{
+    int i, end_data = orig_image->h * orig_image->pitch / 4;
+    Uint32 da, db, areas[64]={0,};
+    Uint32 *timg, *oimg;
+    SDL_PixelFormat *fmt;
+    struct Image *img;
+    Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
+    SDL_Thread *threads[8] = {0,};
+    struct ThreadInfo *tinfo[8] = {0,};
+    //if (image->fitness != ~0) return;
+    image->fitness = 0;
+    mkimg(image, error);
+    // need a fast pixel comparison
+    fmt = orig_image->format;
+    SDL_LockSurface(image->img);
+    timg = image->img->pixels;
+    SDL_LockSurface(orig_image);
+    oimg = orig_image->pixels;
+    if (error)
+    {
+        image->err = surface_from(orig_image, 256, 256);
+        for (i = 0; i < end_data; ++ i)
+        {
+            da = timg[i];
+            db = oimg[i];
+            c_r = COL_AT_(da, R);
+            c_g = COL_AT_(da, G);
+            c_b = COL_AT_(da, B);
+            o_r = COL_AT_(db, R);
+            o_g = COL_AT_(db, G);
+            o_b = COL_AT_(db, B);
+            int wh = ((i>>5)&7)|(((i>>13)&7)<<3);
+            assert(wh<64);
+            NOSQABS(c_r, o_r, areas[wh]);
+            NOSQABS(c_g, o_g, areas[wh]);
+            NOSQABS(c_b, o_b, areas[wh]);
+            ABSOLUTIFY(c_r - o_r, image->fitness);
+            ABSOLUTIFY(c_g - o_g, image->fitness);
+            ABSOLUTIFY(c_b - o_b, image->fitness);
+        }
+        for (i = 0; i < 64; ++ i)
+        {
+            boxRGBA(image->err, (i&7)<<5, ((i>>3)&7)<<5, ((i&7)<<5)+32, (((i>>3)&7)<<5)+32, areas[i]>>10, 0, 0, 255);
+        }
+    }
+    else
+    {
+        for (i = 0; i < 8; ++ i)
+        {
+            tinfo[i] = malloc(sizeof(*tinfo[i]));
+            tinfo[i]->img = image;
+            tinfo[i]->fmt = fmt;
+            tinfo[i]->oimg = oimg;
+            tinfo[i]->timg = timg;
+            tinfo[i]->i = i;
+            threads[i] = SDL_CreateThread(&threadFunction, tinfo[i]);
+        }
+        for (i = 0; i < 8; ++ i)
+        {
+            int n;
+            SDL_WaitThread(threads[i], &n);
+            image->fitness += n;
+            free(tinfo[i]);
+        }
+    }
+    SDL_UnlockSurface(image->img);
+    SDL_UnlockSurface(orig_image);
+}
 
 SDL_Surface *img_lines(struct Image *i)
 {
@@ -157,72 +269,6 @@ void mkimg (struct Image *image, int error)
                           polys[i]->r, polys[i]->g, polys[i]->b, polys[i]->a);
 }
 
-#define NOSQABS(a,b,f) if (a>b)f+=a-b;else f+=b-a
-#define ABSOLUTIFY(a,f) f += (a)*(a)
-#define JOIN(a,b) a ## b
-#define COL_AT_(u,c) (Uint8)((u&fmt->JOIN(c,mask))>>fmt->JOIN(c,shift))<<fmt->JOIN(c,loss)
-void fitness (struct Image *image, int error)
-{
-    int i, end_data = orig_image->h * orig_image->pitch / 4;
-    Uint32 *timg, *oimg, da, db, areas[64]={0,};
-    Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
-    SDL_PixelFormat *fmt = orig_image->format;
-    //if (image->fitness != ~0) return;
-    image->fitness = 0;
-    mkimg(image, error);
-    // need a fast pixel comparison
-    SDL_LockSurface(image->img);
-    timg = image->img->pixels;
-    SDL_LockSurface(orig_image);
-    oimg = orig_image->pixels;
-    if (error)
-    {
-        image->err = surface_from(orig_image, 256, 256);
-        for (i = 0; i < end_data; ++ i)
-        {
-            da = timg[i];
-            db = oimg[i];
-            c_r = COL_AT_(da, R);
-            c_g = COL_AT_(da, G);
-            c_b = COL_AT_(da, B);
-            o_r = COL_AT_(db, R);
-            o_g = COL_AT_(db, G);
-            o_b = COL_AT_(db, B);
-            int wh = ((i>>5)&7)|(((i>>13)&7)<<3);
-            assert(wh<64);
-            NOSQABS(c_r, o_r, areas[wh]);
-            NOSQABS(c_g, o_g, areas[wh]);
-            NOSQABS(c_b, o_b, areas[wh]);
-            ABSOLUTIFY(c_r - o_r, image->fitness);
-            ABSOLUTIFY(c_g - o_g, image->fitness);
-            ABSOLUTIFY(c_b - o_b, image->fitness);
-        }
-        for (i = 0; i < 64; ++ i)
-        {
-            boxRGBA(image->err, (i&7)<<5, ((i>>3)&7)<<5, ((i&7)<<5)+32, (((i>>3)&7)<<5)+32, areas[i]>>10, 0, 0, 255);
-        }
-    }
-    else
-    {
-        for (i = 0; i < end_data; ++ i)
-        {
-            da = timg[i];
-            db = oimg[i];
-            c_r = COL_AT_(da, R);
-            c_g = COL_AT_(da, G);
-            c_b = COL_AT_(da, B);
-            o_r = COL_AT_(db, R);
-            o_g = COL_AT_(db, G);
-            o_b = COL_AT_(db, B);
-            ABSOLUTIFY(c_r - o_r, image->fitness);
-            ABSOLUTIFY(c_g - o_g, image->fitness);
-            ABSOLUTIFY(c_b - o_b, image->fitness);
-        }
-    }
-    SDL_UnlockSurface(image->img);
-    SDL_UnlockSurface(orig_image);
-}
-
 struct Image *thebest(struct Image **images, int num_images, int error)
 {
     int i;
@@ -334,7 +380,7 @@ int main (int argc, char *argv[])
 
     if (TTF_Init() == -1)
     {
-        printf(stderr, "TTF_Init: %s\n", TTF_GetError());
+        printf(stderr, "TTF_Init: %s\n", (const char*)TTF_GetError());
         exit (1);
     }
     TTF_Font *font = TTF_OpenFont("cnew.ttf", 24);
