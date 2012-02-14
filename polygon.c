@@ -364,7 +364,7 @@ int main (int argc, char *argv[])
     SDL_Surface *screen;
     SDL_Rect dest = {0, 30, 256, 256};
     char *file;
-    srand(time(NULL));
+    //srand(time(NULL));
     if (argc < 2)
     {
         printf("Usage:\n     polygon <file to polygonize>\n\n");
