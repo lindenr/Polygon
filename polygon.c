@@ -40,6 +40,7 @@ struct Image
     int num_polys;
     Uint8 br, bg, bb;
     SDL_Surface *err;
+    Uint8 errors[64];
 } *cur_image = NULL;
 void mkimg(struct Image*);
 
@@ -89,6 +90,7 @@ void fitness (struct Image *image, int error)
         for (i = 0; i < 64; ++ i)
         {
             boxRGBA(image->err, (i&7)<<5, ((i>>3)&7)<<5, ((i&7)<<5)+32, (((i>>3)&7)<<5)+32, areas[i]>>10, 0, 0, 255);
+            image->errors[i] = areas[i]>>10;
         }
     }
     else
@@ -158,8 +160,8 @@ struct Image *random_change(struct Image *i)
                 P8[n] += RR(30) - 15;
         }
 
-        if (P8[n] < 40) P8[n] += RR(10);
-        else if (P8[n] > 50) P8[n] -= RR(10);
+        if (P8[n] < 40) P8[n] += RR(30);
+        else if (P8[n] > 50) P8[n] -= RR(30);
     }
     else if (!RR (3))
         i->br += RR(20) - 10;
@@ -262,11 +264,25 @@ struct Image *thebest(struct Image **images, int num_images, int error)
 
 // Relies 32-bit and width=256px TODO
 #define PIXEL_AT(x,y) ((y<<10) + (x<<2))
-void new_polygon()
+void new_polygon(struct Image *image)
 {
     struct Polygon *pl;
     int s = RR(10)+12;
-    int x = RR(256-2*s)+s, y = RR(256-2*s)+s;
+    int x, y;
+    if (image->err == NULL)
+    {
+        x = RR(256-2*s)+s;
+        y = RR(256-2*s)+s;
+    }
+    else
+    {
+        do
+        {
+            x = RR(256-2*s)+s;
+            y = RR(256-2*s)+s;
+        }
+        while(RR(256) > image->errors[(x>>5)+((y>>5)<<3)]);
+    }
     Uint32 u;
     SDL_PixelFormat *fmt;
     pl = malloc(sizeof(struct Polygon));
@@ -293,7 +309,7 @@ void new_polygon()
     pl->g = COL_AT_(u,G);
     pl->b = COL_AT_(u,B);
     pl->a = 35;
-    add_poly(cur_image, pl);
+    add_poly(image, pl);
 }
 
 int main_loop()
@@ -309,7 +325,7 @@ int main_loop()
             }
             case SDL_KEYDOWN:
             {
-                new_polygon();
+                new_polygon(cur_image);
                 break;
             }
         }
@@ -318,7 +334,7 @@ int main_loop()
                             random_change(duplicate_image(cur_image)),
                             random_change(duplicate_image(cur_image))};
     cur_image = thebest(ptrs, 3, !((++generation)%400));
-    if (!((generation)%400)) new_polygon();
+    if (!((generation)%400)) new_polygon(cur_image);
     float cur = ((float)cur_image->fitness)/65536;
     char str[80];
     sprintf(str, "Generation %d, best: %f", generation, cur);
@@ -358,7 +374,9 @@ int main (int argc, char *argv[])
     //srand(time(NULL));
     if (argc < 2)
     {
-        printf("Usage:\n     polygon <file to polygonize>\n\n");
+        printf(
+"Usage:\n\
+    polygon <image to polygonize>\n\n");
         exit (0);
     }
 
@@ -376,7 +394,7 @@ int main (int argc, char *argv[])
     }
     font = TTF_OpenFont("cnew.ttf", 12);
 
-    screen = SDL_SetVideoMode (520, 580, 32, SDL_SWSURFACE);
+    screen = SDL_SetVideoMode (520, 550, 32, SDL_SWSURFACE);
     if (screen == NULL)
     {
         fprintf (stderr, "Unable to set video mode: %s\n", SDL_GetError ());
