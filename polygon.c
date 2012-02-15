@@ -5,10 +5,12 @@
 #include <SDL/SDL_gfxPrimitives_font.h>
 #include <SDL/SDL_image.h>
 #include <SDL/SDL_ttf.h>
+#include <omp.h>
 
 SDL_Surface *orig_image;
-float cur_best = 10000;
 int generation = 0;
+int gen_at_last_sec_change = 0, last_sec = 0;
+void draw_text(char *txt, int x, int y);
 
 SDL_Surface *surface_from(SDL_Surface *sf, int w, int h)
 {
@@ -20,6 +22,7 @@ SDL_Surface *crop_surface(SDL_Surface* sprite_sheet, int x, int y, int width, in
     SDL_Surface *surface = surface_from(sprite_sheet, width, height);
     SDL_Rect rect = {x, y, width, height};
     SDL_BlitSurface(sprite_sheet, &rect, surface, 0);
+    SDL_FreeSurface(sprite_sheet);
     return surface;
 }
 
@@ -38,49 +41,12 @@ struct Image
     Uint8 br, bg, bb;
     SDL_Surface *err;
 } *cur_image = NULL;
-void mkimg(struct Image*, int);
-
-struct ThreadInfo
-{
-    Uint32 *timg, *oimg;
-    SDL_PixelFormat *fmt;
-    struct Image *img;
-    int i;
-};
+void mkimg(struct Image*);
 
 #define NOSQABS(a,b,f) if (a>b)f+=a-b;else f+=b-a
 #define ABSOLUTIFY(a,f) f += (a)*(a)
 #define JOIN(a,b) a ## b
 #define COL_AT_(u,c) (Uint8)((u&fmt->JOIN(c,mask))>>fmt->JOIN(c,shift))<<fmt->JOIN(c,loss)
-int threadFunction(void *threadinfo)
-{
-    struct ThreadInfo *tinfo = threadinfo;
-    SDL_PixelFormat *fmt = tinfo->fmt;
-    Uint32 *timg = tinfo->timg, *oimg = tinfo->oimg;
-    int data;
-    Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
-    int i, ret = 0;
-    Uint32 da, db;
-    struct Image *image = tinfo->img;
-    data = tinfo->i;
-    data <<= 13;
-    for (i = 0; i < 8192; ++ i)
-    {
-        da = timg[i+data];
-        db = oimg[i+data];
-        c_r = COL_AT_(da, R);
-        c_g = COL_AT_(da, G);
-        c_b = COL_AT_(da, B);
-        o_r = COL_AT_(db, R);
-        o_g = COL_AT_(db, G);
-        o_b = COL_AT_(db, B);
-        ABSOLUTIFY(c_r - o_r, ret);
-        ABSOLUTIFY(c_g - o_g, ret);
-        ABSOLUTIFY(c_b - o_b, ret);
-    }
-    return ret;
-}
-
 void fitness (struct Image *image, int error)
 {
     int i, end_data = orig_image->h * orig_image->pitch / 4;
@@ -89,11 +55,9 @@ void fitness (struct Image *image, int error)
     SDL_PixelFormat *fmt;
     struct Image *img;
     Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
-    SDL_Thread *threads[8] = {0,};
-    struct ThreadInfo *tinfo[8] = {0,};
     //if (image->fitness != ~0) return;
     image->fitness = 0;
-    mkimg(image, error);
+    mkimg(image);
     // need a fast pixel comparison
     fmt = orig_image->format;
     SDL_LockSurface(image->img);
@@ -129,22 +93,29 @@ void fitness (struct Image *image, int error)
     }
     else
     {
-        for (i = 0; i < 8; ++ i)
+        int ret;
+        Uint8 c_r, c_g, c_b, o_r, o_g, o_b;
+        Uint32 da, db;
+#pragma omp parallel private(ret, c_r, c_g, c_b, o_r, o_g, o_b, da, db)
         {
-            tinfo[i] = malloc(sizeof(*tinfo[i]));
-            tinfo[i]->img = image;
-            tinfo[i]->fmt = fmt;
-            tinfo[i]->oimg = oimg;
-            tinfo[i]->timg = timg;
-            tinfo[i]->i = i;
-            threads[i] = SDL_CreateThread(&threadFunction, tinfo[i]);
-        }
-        for (i = 0; i < 8; ++ i)
-        {
-            int n;
-            SDL_WaitThread(threads[i], &n);
-            image->fitness += n;
-            free(tinfo[i]);
+            ret = 0;
+#  pragma omp for schedule(dynamic, 65536)
+            for (i = 0; i < (1<<16); ++ i)
+            {
+                da = timg[i];
+                db = oimg[i];
+                c_r = COL_AT_(da, R);
+                c_g = COL_AT_(da, G);
+                c_b = COL_AT_(da, B);
+                o_r = COL_AT_(db, R);
+                o_g = COL_AT_(db, G);
+                o_b = COL_AT_(db, B);
+                ABSOLUTIFY(c_r - o_r, ret);
+                ABSOLUTIFY(c_g - o_g, ret);
+                ABSOLUTIFY(c_b - o_b, ret);
+            }
+#  pragma omp critical
+            image->fitness += ret;
         }
     }
     SDL_UnlockSurface(image->img);
@@ -256,7 +227,7 @@ struct Image *duplicate_image(struct Image* i)
     return ret;
 }
 
-void mkimg (struct Image *image, int error)
+void mkimg (struct Image *image)
 {
     SDL_Surface *ret = image->img;
     struct Polygon **polys = image->polys;
@@ -346,12 +317,33 @@ int main_loop()
     struct Image *ptrs[] = {cur_image,
                             random_change(duplicate_image(cur_image)),
                             random_change(duplicate_image(cur_image))};
-    cur_image = thebest(ptrs, 3, !((++generation)%50));
+    cur_image = thebest(ptrs, 3, !((++generation)%400));
     if (!((generation)%400)) new_polygon();
     float cur = ((float)cur_image->fitness)/65536;
-    printf("Current best: %f (generation %d)\n", cur, generation);
-    cur_best = cur;
+    char str[80];
+    sprintf(str, "Generation %d, best: %f", generation, cur);
+    draw_text(str, 0, 0);
+    if (time(NULL) != last_sec)
+    {
+        sprintf(str, "Speed: %dG/s", generation-gen_at_last_sec_change);
+        draw_text(str, 0, 15);
+        gen_at_last_sec_change = generation;
+        last_sec = time(NULL);
+    }
     return 0;
+}
+
+TTF_Font *font;
+SDL_Surface *screen;
+
+void draw_text(char *txt, int x, int y)
+{
+    SDL_Color col = {255, 255, 255};
+    SDL_Surface *s = TTF_RenderText_Solid(font, txt, col);
+    boxRGBA(screen, x, y, x+s->w, y+s->h, 0, 0, 0, 255);
+    SDL_Rect rect = {x, y, s->w, s->h};
+    SDL_BlitSurface(s, NULL, screen, &rect);
+    SDL_FreeSurface(s);
 }
 
 /* windows likes this :/ */
@@ -361,7 +353,6 @@ int main_loop()
 
 int main (int argc, char *argv[])
 {
-    SDL_Surface *screen;
     SDL_Rect dest = {0, 30, 256, 256};
     char *file;
     //srand(time(NULL));
@@ -383,9 +374,9 @@ int main (int argc, char *argv[])
         printf(stderr, "TTF_Init: %s\n", (const char*)TTF_GetError());
         exit (1);
     }
-    TTF_Font *font = TTF_OpenFont("cnew.ttf", 24);
+    font = TTF_OpenFont("cnew.ttf", 12);
 
-    screen = SDL_SetVideoMode (520, 550, 32, SDL_SWSURFACE);
+    screen = SDL_SetVideoMode (520, 580, 32, SDL_SWSURFACE);
     if (screen == NULL)
     {
         fprintf (stderr, "Unable to set video mode: %s\n", SDL_GetError ());
@@ -407,12 +398,7 @@ int main (int argc, char *argv[])
     SDL_BlitSurface(orig_image, NULL, screen, &dest);
     SDL_UpdateRects(screen, 1, &dest);
     dest.x = 264;
-    mkimg(cur_image, 0);
-    SDL_Color col = {255, 255, 255};
-    SDL_Surface *s = TTF_RenderText_Solid(font, "hello", col);
-    SDL_Rect rect = {0, 0, 300, 30};
-    SDL_BlitSurface(s, NULL, screen, &rect);
-    SDL_FreeSurface(s);
+    mkimg(cur_image);
     do
     {
         dest.x = 264;
